@@ -19,7 +19,7 @@
 
 /* defines */
 
-#define VUM_VERSION "0.0.2"
+#define VUM_VERSION "0.0.3"
 #define VUM_TAB_STOP 8
 #define VUM_QUIT_TIMES 3
 
@@ -35,6 +35,9 @@ enum editorKey {
 	EDITOR_RIGHT,
 	EDITOR_UP,
 	EDITOR_DOWN,
+	START_NEXT_WORD,
+	END_NEXT_WORD,
+	PREV_WORD,
 	DEL_KEY,
 	HOME_KEY,
 	END_KEY,
@@ -218,6 +221,11 @@ int editorReadKey() {
 			case 'j': return EDITOR_DOWN;
 			case 'h': return EDITOR_LEFT;
 			case 'l': return EDITOR_RIGHT;
+			case 'w': return START_NEXT_WORD;
+			case 'e': return END_NEXT_WORD;
+			case 'b': return PREV_WORD;
+			case '_': return HOME_KEY;
+			case '$': return END_KEY;
 			defalut:  return c;
 		}
 		return c;
@@ -789,6 +797,59 @@ char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
 	}
 }
 
+void editorMoveWordStart() {
+	char *line = E.row[E.cy].chars;
+
+	char c;
+	while ((c = line[E.cx])) {
+		if (is_separator(c)) {
+			break;
+		}
+		E.cx++;
+	}
+	while ((c = line[E.cx])) {
+		if (!is_separator(c)) {
+			break;
+		}
+		E.cx++;
+	}
+}
+
+void editorMoveWordEnd() {
+	char *line = E.row[E.cy].chars;
+	E.cx++;
+
+	char c;
+	while ((c = line[E.cx])) {
+		if (!is_separator(c)) {
+			break;
+		}
+		E.cx++;
+	}
+	while ((c = line[E.cx])) {
+		if (is_separator(c)) {
+			break;
+		}
+		E.cx++;
+	}
+	E.cx--;
+}
+
+void editorMoveWordPrev() {
+    char *line = E.row[E.cy].chars;
+    int len = E.row[E.cy].size;
+
+    if (E.cx == 0) return;
+
+    E.cx--;
+    while (E.cx > 0 && is_separator(line[E.cx])) {
+        E.cx--;
+    }
+    while (E.cx > 0 && !is_separator(line[E.cx - 1])) {
+        E.cx--;
+    }
+}
+
 void editorMoveCursor(int key) {
 	erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
 
@@ -822,6 +883,15 @@ void editorMoveCursor(int key) {
 			if (E.cy != E.numrows) {
 				E.cy++;
 			}
+			break;
+		case START_NEXT_WORD:
+			editorMoveWordStart();
+			break;
+		case END_NEXT_WORD:
+			editorMoveWordEnd();
+			break;
+		case PREV_WORD:
+			editorMoveWordPrev();
 			break;
 	}
 
@@ -867,7 +937,17 @@ void editorProcessKeypress() {
 			case EDITOR_DOWN:
 			case EDITOR_LEFT:
 			case EDITOR_RIGHT:
+			case START_NEXT_WORD:
+			case END_NEXT_WORD:
+			case PREV_WORD:
 				editorMoveCursor(c);
+				break;
+			case HOME_KEY:
+				E.cx = 0;
+				break;
+			case END_KEY:
+				if (E.cy < E.numrows)
+					E.cx = E.row[E.cy].size;
 				break;
 			case 'i':
 				E.mode = INSERT_MODE;
@@ -990,6 +1070,16 @@ void editorDrawRows(struct abuf *ab) {
 						current_color = -1;
 					}
 					abAppend(ab, &c[j], 1);
+				} else if (hl[j] == HL_MATCH) {
+					int color = editorSyntaxToColor(hl[j]);
+					if (color != current_color) {
+						current_color = color;
+					}
+					char buf[16];
+					int clen = snprintf(buf, sizeof(buf), "\x1b[48;5;%dm", color);
+					abAppend(ab, buf, clen);
+					abAppend(ab, &c[j], 1);
+					abAppend(ab, "\x1b[49m", 5); // reset background color
 				} else {
 					int color = editorSyntaxToColor(hl[j]);
 					if (color != current_color) {
@@ -1001,7 +1091,7 @@ void editorDrawRows(struct abuf *ab) {
 					abAppend(ab, &c[j], 1);
 				}
 			}
-			abAppend(ab, "\x1b[39m", 5);
+			abAppend(ab, "\x1b[39m", 5); // reset text color
 		}
 
 		abAppend(ab, "\x1b[K", 3);
