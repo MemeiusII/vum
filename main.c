@@ -19,9 +19,10 @@
 
 /* defines */
 
-#define VUM_VERSION "0.0.3"
+#define VUM_VERSION "0.0.4"
 #define VUM_TAB_STOP 8
 #define VUM_QUIT_TIMES 3
+#define VUM_CLIP_SIZE 256
 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
@@ -59,7 +60,8 @@ enum editorHighlight {
 
 enum editorMode {
 	NORMAL_MODE = 0,
-	INSERT_MODE
+	INSERT_MODE,
+	VISUAL_MODE
 };
 
 #define HL_HIGHLIGHT_NUMBERS (1<<0)
@@ -77,6 +79,13 @@ struct editorSyntax {
 	int flags;
 };
 
+typedef struct selection {
+	int start_row;
+	int start_col;
+	int end_row;
+	int end_col;
+} selection;
+
 typedef struct erow {
 	int idx;
 	int size;
@@ -90,15 +99,18 @@ typedef struct erow {
 struct editorConfig {
 	int cx, cy;
 	int rx;
+	int vx, vy; // visual mode anchor point
 	int rowoff;
 	int coloff;
 	int screenrows;
 	int screencols;
 	int numrows;
-	erow *row;
 	int dirty;
+	int clipboard_len;
+	erow *row;
 	char *filename;
 	char statusmsg[80];
+	char clipboard[VUM_CLIP_SIZE];
 	time_t statusmsg_time;
 	enum editorMode mode;
 	struct editorSyntax *syntax;
@@ -216,6 +228,7 @@ int editorReadKey() {
 
 		return '\x1b';
 	} else {
+		if (E.mode == INSERT_MODE) return c;
 		switch (c) {
 			case 'k': return EDITOR_UP;
 			case 'j': return EDITOR_DOWN;
@@ -757,6 +770,78 @@ void abFree(struct abuf *ab) {
 	free(ab->b);
 }
 
+/* copy and past */
+
+void editorGetSelection(int *sr, int *sc, int *er, int *ec) {
+    *sr = E.vy;
+    *sc = E.vx;
+    *er = E.cy;
+    *ec = E.cx;
+
+    if (*sr > *er || (*sr == *er && *sc > *ec)) {
+        int tmp;
+        tmp = *sr; *sr = *er; *er = tmp;
+        tmp = *sc; *sc = *ec; *ec = tmp;
+    }
+}
+
+void editorYoinkSelection(void) {
+    if (E.mode != VISUAL_MODE) return;
+
+    int sr, sc, er, ec;
+    editorGetSelection(&sr, &sc, &er, &ec);
+
+    size_t pos = 0;
+
+    for (int i = sr; i <= er; i++) {
+        int start = 0;
+        int end = E.row[i].size;
+
+        if (i == sr) start = sc;
+        if (i == er) end = ec;
+
+        int len = end - start;
+
+        /* copy characters */
+        for (int j = 0; j < len; j++) {
+            if (pos >= VUM_CLIP_SIZE - 1) {
+                E.clipboard[pos] = '\0';
+                E.clipboard_len = pos;
+                editorSetStatusMessage("Yoink truncated (clipboard full)");
+                return;
+            }
+
+            E.clipboard[pos++] = E.row[i].chars[start + j];
+        }
+
+        /* add newline between lines */
+        if (i != er) {
+            if (pos >= VUM_CLIP_SIZE - 1) {
+                E.clipboard[pos] = '\0';
+                E.clipboard_len = pos;
+                editorSetStatusMessage("Yoink truncated (clipboard full)");
+                return;
+            }
+            E.clipboard[pos++] = '\n';
+        }
+    }
+    E.clipboard[pos] = '\0';
+    E.clipboard_len = pos;
+
+    editorSetStatusMessage("Yoinked %zu bytes", pos);
+}
+
+void editorPlop(void) {
+    for (size_t i = 0; i < E.clipboard_len; i++) {
+        if (E.clipboard[i] == '\n') {
+            editorInsertNewLine();
+        } else {
+            editorInsertChar(E.clipboard[i]);
+        }
+    }
+    editorSetStatusMessage("Plopped %zu bytes", E.clipboard_len);
+}
+
 /* input */
 
 char *editorPrompt(char *prompt, void (*callback)(char *, int)) {
@@ -933,10 +1018,23 @@ void editorProcessKeypress() {
 				editorMoveCursor(EDITOR_RIGHT);
 				editorDelChar();
 				break;
+			case 'p':
+				editorPlop();
+				break;
+			case 'o':
+				if (E.cy < E.numrows)
+					E.cx = E.row[E.cy].size;
+				editorInsertNewLine();
+				E.mode = INSERT_MODE;
+				break;
 			case EDITOR_UP:
 			case EDITOR_DOWN:
 			case EDITOR_LEFT:
 			case EDITOR_RIGHT:
+			case ARROW_UP:
+			case ARROW_DOWN:
+			case ARROW_LEFT:
+			case ARROW_RIGHT:
 			case START_NEXT_WORD:
 			case END_NEXT_WORD:
 			case PREV_WORD:
@@ -952,6 +1050,13 @@ void editorProcessKeypress() {
 			case 'i':
 				E.mode = INSERT_MODE;
 				editorSetStatusMessage("ENTERED INSERT MODE");
+				break;
+			case 'v':
+				E.vx = E.cx;
+				E.vy = E.cy;
+				E.mode = VISUAL_MODE;
+				editorSetStatusMessage("ENTERED VISUAL MODE");
+				break;
 			default:
 				break;
 		}
@@ -998,12 +1103,75 @@ void editorProcessKeypress() {
 				editorInsertChar(c);
 				break;
 		}
+	} else if (E.mode == VISUAL_MODE) {
+		switch (c) {
+			case 'y':
+				editorYoinkSelection();
+				E.mode = NORMAL_MODE;
+				break;
+			case EDITOR_UP:
+			case EDITOR_DOWN:
+			case EDITOR_LEFT:
+			case EDITOR_RIGHT:
+			case ARROW_UP:
+			case ARROW_DOWN:
+			case ARROW_LEFT:
+			case ARROW_RIGHT:
+			case START_NEXT_WORD:
+			case END_NEXT_WORD:
+			case PREV_WORD:
+				editorMoveCursor(c);
+				break;
+			case HOME_KEY:
+				E.cx = 0;
+				break;
+			case END_KEY:
+				if (E.cy < E.numrows)
+					E.cx = E.row[E.cy].size;
+				break;
+			case '\x1b':
+				E.vx = 0;
+				E.vy = 0;
+				E.mode = NORMAL_MODE;
+				editorSetStatusMessage("ENTERED NORMAL MODE");
+				break;
+			default:
+				break;
+		}
+	
 	}
 
 	quit_times = VUM_QUIT_TIMES;
 }
 
 /* output */
+
+int editorIsSelected(int row, int col) {
+    if (E.mode != VISUAL_MODE) return 0;
+
+    int sr = E.vy;
+    int sc = E.vx;
+    int er = E.cy;
+    int ec = E.cx;
+
+    // normalize
+    if (sr > er || (sr == er && sc > ec)) {
+        int tmp;
+        tmp = sr; sr = er; er = tmp;
+        tmp = sc; sc = ec; ec = tmp;
+    }
+
+    if (row < sr || row > er) return 0;
+
+    if (sr == er) {
+        return (col >= sc && col < ec);
+    }
+
+    if (row == sr) return col >= sc;
+    if (row == er) return col < ec;
+
+    return 1;
+}
 
 void editorScroll() {
 	E.rx = 0;
@@ -1054,6 +1222,13 @@ void editorDrawRows(struct abuf *ab) {
 			int current_color = -1;
 			int j;
 			for (j = 0; j < len; j++) {
+				int render_col = j + E.coloff;
+				if (editorIsSelected(filerow, render_col)) {
+					abAppend(ab, "\x1b[7m", 4);   // reverse video
+					abAppend(ab, &c[j], 1);
+					abAppend(ab, "\x1b[m", 3);
+					continue;
+				}
 				if (iscntrl(c[j])) {
 					char sym = (c[j] <= 26 ? '@' + c[j] : '?');
 					abAppend(ab, "\x1b[7m", 4);
@@ -1102,8 +1277,21 @@ void editorDrawRows(struct abuf *ab) {
 void editorDrawStatusBar(struct abuf *ab) {
 	abAppend(ab, "\x1b[7m", 4); // <esc[7m> inverts colors
 	char status[80], rstatus[80];
+	char *mode;
+	switch (E.mode) {
+		case NORMAL_MODE: 
+			mode = "NORMAL";
+			break;
+		case INSERT_MODE: 
+			mode = "INSERT";
+			break;
+		case VISUAL_MODE: 
+			mode = "VISUAL";
+			break;
+		default: mode = "";
+	}
 	int len = snprintf(status, sizeof(status), "Mode: %s %.20s - %d lines %s",
-			E.mode == NORMAL_MODE ? "NORMAL" : "INSERT",
+			mode,
 			E.filename ? E.filename : "[No Name]", 
 			E.numrows, 
 			E.dirty ? "(modified)" : "");
@@ -1169,13 +1357,17 @@ void initEditor() {
 	E.cx = 0;
 	E.cy = 0;
 	E.rx = 0;
+	E.vx = 0;
+	E.vy = 0;
 	E.rowoff = 0;
 	E.coloff = 0;
 	E.numrows = 0;
 	E.row = NULL;
 	E.dirty = 0;
+	E.clipboard_len = 0;
 	E.filename = NULL;
 	E.statusmsg[0] = '\0';
+	E.clipboard[0] = '\0';
 	E.statusmsg_time = 0;
 	E.syntax = NULL;
 	E.mode = NORMAL_MODE;
