@@ -19,7 +19,7 @@
 
 /* defines */
 
-#define VUM_VERSION "0.0.4"
+#define VUM_VERSION "0.0.5"
 #define VUM_TAB_STOP 8
 #define VUM_QUIT_TIMES 3
 #define VUM_CLIP_SIZE 256
@@ -228,7 +228,7 @@ int editorReadKey() {
 
 		return '\x1b';
 	} else {
-		if (E.mode == INSERT_MODE) return c;
+		if (E.mode != NORMAL_MODE) return c;
 		switch (c) {
 			case 'k': return EDITOR_UP;
 			case 'j': return EDITOR_DOWN;
@@ -693,6 +693,7 @@ void editorFindCallback(char *query, int key) {
 	if (key == '\r' || key == '\x1b') {
 		last_match = -1;
 		direction = 1;
+		E.mode = NORMAL_MODE;
 		return;
 	} else if (key == ARROW_RIGHT || key == ARROW_DOWN) {
 		direction = 1;
@@ -726,10 +727,10 @@ void editorFindCallback(char *query, int key) {
 			break;
 		}
 	}
-
 }
 
 void editorFind() {
+	E.mode = INSERT_MODE; // if in normal mode, certain keys are processed wrong
 	int saved_cx = E.cx;
 	int saved_cy = E.cy;
 	int saved_coloff = E.coloff;
@@ -1026,6 +1027,7 @@ void editorProcessKeypress() {
 					E.cx = E.row[E.cy].size;
 				editorInsertNewLine();
 				E.mode = INSERT_MODE;
+				editorSetStatusMessage("ENTERED INSERT MODE");
 				break;
 			case EDITOR_UP:
 			case EDITOR_DOWN:
@@ -1048,6 +1050,11 @@ void editorProcessKeypress() {
 					E.cx = E.row[E.cy].size;
 				break;
 			case 'i':
+				E.mode = INSERT_MODE;
+				editorSetStatusMessage("ENTERED INSERT MODE");
+				break;
+			case 'a':
+				E.cx++;
 				E.mode = INSERT_MODE;
 				editorSetStatusMessage("ENTERED INSERT MODE");
 				break;
