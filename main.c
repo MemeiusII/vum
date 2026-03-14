@@ -19,7 +19,7 @@
 
 /* defines */
 
-#define VUM_VERSION "0.0.5"
+#define VUM_VERSION "0.0.6"
 #define VUM_TAB_STOP 8
 #define VUM_QUIT_TIMES 3
 #define VUM_CLIP_SIZE 256
@@ -228,7 +228,7 @@ int editorReadKey() {
 
 		return '\x1b';
 	} else {
-		if (E.mode != NORMAL_MODE) return c;
+		if (E.mode == INSERT_MODE) return c;
 		switch (c) {
 			case 'k': return EDITOR_UP;
 			case 'j': return EDITOR_DOWN;
